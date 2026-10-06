@@ -1,0 +1,217 @@
+// ATHAR — Prisma schema (PostgreSQL)
+
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Role {
+  VOLUNTEER
+  ORGANIZATION
+  ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum ProficiencyLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+enum ProjectStatus {
+  DRAFT
+  PUBLISHED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ApplicationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+// ───────────────────────────── Identity ─────────────────────────────
+
+model User {
+  id               String        @id @default(uuid()) @db.Uuid
+  name             String
+  email            String        @unique
+  passwordHash     String
+  /// Hash of the current refresh token (never the token itself). Null = logged out.
+  refreshTokenHash String?
+  role             Role
+  status           AccountStatus @default(ACTIVE)
+  location         String?
+  availability     String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  volunteerProfile    VolunteerProfile?
+  organizationProfile OrganizationProfile?
+  skills              UserSkill[]
+  applications        Application[]
+
+  @@index([role, status])
+  @@map("users")
+}
+
+model VolunteerProfile {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @unique @db.Uuid
+  bio          String?
+  phone        String?
+  location     String?
+  availability String?
+  experience   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("volunteer_profiles")
+}
+
+model OrganizationProfile {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @unique @db.Uuid
+  name         String
+  description  String?
+  logo         String?
+  location     String?
+  website      String?
+  contactEmail String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projects Project[]
+
+  @@map("organization_profiles")
+}
+
+// ───────────────────────────── Skills ─────────────────────────────
+
+model Skill {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+
+  users    UserSkill[]
+  projects ProjectSkill[]
+
+  @@map("skills")
+}
+
+model UserSkill {
+  userId      String           @db.Uuid
+  skillId     String           @db.Uuid
+  proficiency ProficiencyLevel @default(BEGINNER)
+  createdAt   DateTime         @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([userId, skillId])
+  @@index([skillId])
+  @@map("user_skills")
+}
+
+// ───────────────────────────── Projects ─────────────────────────────
+
+model Project {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  title          String
+  description    String
+  location       String?
+  startDate      DateTime?
+  endDate        DateTime?
+  status         ProjectStatus @default(DRAFT)
+  maxVolunteers  Int?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization OrganizationProfile @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  skills       ProjectSkill[]
+  applications Application[]
+  impact       Impact?
+
+  @@index([organizationId])
+  @@index([status, startDate])
+  @@index([location])
+  @@map("projects")
+}
+
+model ProjectSkill {
+  projectId     String @db.Uuid
+  skillId       String @db.Uuid
+  requiredCount Int    @default(1)
+  /// Weight of this skill in matching (1 = nice to have … 5 = critical).
+  importance    Int    @default(3)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  skill   Skill   @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, skillId])
+  @@index([skillId])
+  @@map("project_skills")
+}
+
+// ───────────────────────────── Applications ─────────────────────────────
+
+model Application {
+  id          String            @id @default(uuid()) @db.Uuid
+  projectId   String            @db.Uuid
+  volunteerId String            @db.Uuid
+  status      ApplicationStatus @default(PENDING)
+  /// 0–100, computed by the matching module at application time.
+  matchScore  Int?
+  message     String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  volunteer User    @relation(fields: [volunteerId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, volunteerId])
+  @@index([volunteerId])
+  @@index([projectId, status])
+  @@map("applications")
+}
+
+// ───────────────────────────── Impact ─────────────────────────────
+
+model Impact {
+  id                 String   @id @default(uuid()) @db.Uuid
+  projectId          String   @unique @db.Uuid
+  volunteersCount    Int      @default(0)
+  hours              Decimal  @default(0) @db.Decimal(10, 2)
+  activitiesCount    Int      @default(0)
+  beneficiariesCount Int      @default(0)
+  resources          String?
+  description        String?
+  /// Extension point: new metrics can be added here without a migration.
+  metrics            Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("impacts")
+}

@@ -1,10 +1,12 @@
 import { Controller, Get, INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { Public } from '../src/common/decorators/public.decorator';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 
 /** Test-only route: proves the global ThrottlerGuard protects every non-exempt endpoint. */
+@Public()
 @Controller('__throttle-probe')
 class ThrottleProbeController {
   @Get()

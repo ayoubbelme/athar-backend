@@ -3,8 +3,8 @@
 Smart volunteering platform: connects young people's skills with volunteering opportunities and helps
 organizations manage projects and measure social impact.
 
-> **Status: Phase 1 — Foundation complete.** Auth, profiles, skills, projects, applications, matching and
-> impact are delivered in Phases 2–7 (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
+> **Status: Phase 2 — Authentication complete** (on top of the Phase 1 foundation). Profiles, skills,
+> projects, applications, matching and impact are delivered in Phases 3–7 (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
 > that do not exist yet.
 
 ## Tech stack
@@ -15,7 +15,7 @@ organizations manage projects and measure social impact.
 | Framework | NestJS 11 (modular monolith) |
 | Database / ORM | PostgreSQL, Prisma 6 (Rust-free client + `pg` driver adapter) |
 | Validation | class-validator, class-transformer, Joi (env) |
-| Security | Helmet, CORS allow-list, `@nestjs/throttler`, argon2 (hashing, used from Phase 2) |
+| Security | Helmet, CORS allow-list, `@nestjs/throttler`, argon2id password hashing, JWT + Passport |
 | Docs | Swagger / OpenAPI at `/api/docs` (non-production) |
 | Logging | pino via `nestjs-pino` (structured JSON, secrets redacted) |
 | Quality | Jest, ESLint 9 (flat config) + Prettier |
@@ -61,6 +61,7 @@ npm run start:dev            # http://localhost:3000
 | `JWT_REFRESH_EXPIRES_IN` | no | `7d` | |
 | `CORS_ORIGIN` | **yes** | — | Comma-separated origins. `*` only for development |
 | `THROTTLE_TTL` / `THROTTLE_LIMIT` | no | `60` / `100` | Requests per IP per window (seconds) |
+| `THROTTLE_AUTH_LIMIT` | no | `10` | Stricter per-minute limit per IP on each of `/auth/login`, `/register`, `/refresh`, `/logout` |
 
 The app **refuses to start** if a required variable is missing or a secret is too short.
 
@@ -108,11 +109,21 @@ src/
 ├── config/                 typed configuration + Joi env validation
 ├── prisma/                 PrismaService / PrismaModule (global)
 ├── health/                 GET /health (real DB round-trip)
+├── auth/
+│   ├── controllers/        AuthController
+│   ├── services/           AuthService (flows), TokenService (sessions/rotation), PasswordService
+│   ├── strategies/         JwtStrategy (loads user + status from DB per request)
+│   ├── guards/             JwtAuthGuard (global, secure by default)
+│   └── dto/ interfaces/ auth.constants.ts
+├── users/                  UsersService (public user projection), UserResponseDto
 └── common/
     ├── constants/          pagination limits, Swagger tags
-    ├── dto/                PaginationQueryDto, paginated response types
+    ├── decorators/         @Public, @Roles, @CurrentUser, @Client
+    ├── guards/             RolesGuard
+    ├── interfaces/         AuthenticatedUser
+    ├── dto/                PaginationQueryDto, paginated types, ErrorResponseDto
     ├── filters/            AllExceptionsFilter (uniform errors, Prisma mapping)
-    └── utils/              pagination helpers
+    └── utils/              pagination + input-normalization helpers
 prisma/
 ├── schema.prisma
 ├── migrations/
@@ -126,6 +137,7 @@ Feature modules (`auth`, `users`, `volunteers`, `organizations`, `skills`, `proj
 ### Data model
 
 ```text
+User 1─* RefreshToken   (one family of rotating tokens per device session)
 User 1─1 VolunteerProfile
 User 1─1 OrganizationProfile 1─* Project 1─1 Impact
 User *─* Skill   (UserSkill: proficiency)
@@ -144,21 +156,28 @@ User 1─* Application *─1 Project   (unique: projectId + volunteerId)
 4. **Strict validation pipe** (`whitelist` + `forbidNonWhitelisted`): unknown properties are rejected,
    preventing mass-assignment bugs.
 5. **UUID primary keys.** Safe to expose in URLs; no enumeration.
-6. **Refresh token stored hashed** in `users.refreshTokenHash` (nullable; `null` = logged out). Chosen
-   for simplicity; see "Known trade-offs".
+6. **Multi-device sessions via a `refresh_tokens` table.** Each login creates a session (a "family" of
+   rotating refresh tokens). Only a SHA-256 hash of each token is stored. Logging out one device does not
+   affect others. See [Authentication](#authentication).
 7. **`Application.volunteerId` references `User`** (not `VolunteerProfile`) so a volunteer can apply
    without a complete profile.
 8. **`Impact` is 1:1 with `Project`** and has a nullable JSON `metrics` column so new metrics can be
    added without breaking existing rows.
 9. **Rate limiting is global** (`APP_GUARD`); `/health` is exempt for orchestrator probes.
 10. **Request bodies and auth headers are never logged.**
+11. **Secure by default:** `JwtAuthGuard` and `RolesGuard` are global. Every route requires a token unless
+    marked `@Public()`; `@Roles(...)` adds role checks. Forgetting a decorator fails closed.
+12. **Role and status are read from the database, not the token.** The access token only carries the user id.
+13. **Registration creates the profile row** (empty `VolunteerProfile`, or `OrganizationProfile` named by
+    `organizationName`) in the same transaction, so later phases can assume it exists.
 
 ### Known trade-offs
 
-* A single `refreshTokenHash` per user means one active session: logging in on a second device
-  invalidates the first. If multi-device login is needed, replace it with a `RefreshToken` table
-  (decide before Phase 2).
-* `availability` is free text for now (see open questions below).
+* Expired sessions are purged opportunistically on the user's next login; there is no scheduler. If the
+  table grows large, add a periodic cleanup (`DELETE ... WHERE "expiresAt" < now()`).
+* The access token is stateless, but every request loads the user (one primary-key query) so suspension
+  and role changes take effect immediately. That costs a query per request in exchange for correctness.
+* `availability` is free text for now.
 
 ## Error format
 
@@ -176,11 +195,62 @@ User 1─* Application *─1 Project   (unique: projectId + volunteerId)
 Paginated lists return `{ "data": [], "meta": { "page", "limit", "total", "totalPages" } }`
 (`limit` max 100, default 20).
 
+## Authentication
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| POST | `/auth/register` | public | Create a VOLUNTEER or ORGANIZATION account (+ profile) and sign in |
+| POST | `/auth/login` | public | Sign in on this device |
+| POST | `/auth/refresh` | public | Rotate tokens (body: `refreshToken`) |
+| POST | `/auth/logout` | public | Revoke **this device's** session (body: `refreshToken`) → 204 |
+| POST | `/auth/logout-all` | Bearer | Revoke **all** devices → 204 |
+| GET | `/auth/me` | Bearer | Current user |
+
+**Flow (mobile app)**
+
+1. `register` / `login` → `{ user, tokens: { accessToken, refreshToken, accessTokenExpiresAt } }`.
+   Keep the refresh token in secure storage (Keychain / Keystore), the access token in memory.
+2. Send `Authorization: Bearer <accessToken>` on every request (default lifetime 15 min).
+3. On `401`, call `/auth/refresh` **once**, replace *both* tokens, retry the original request.
+   Serialize refresh calls in the client (one in flight at a time).
+4. If refresh returns `401`, the session is over: show the login screen.
+5. Sign out: `POST /auth/logout` with the refresh token.
+
+**Multi-device and rotation rules**
+
+* Every login is an independent session, so phone and tablet stay signed in together.
+* Refresh tokens are **single-use**: each refresh revokes the old token and issues a new one in the same session.
+* **Reuse detection:** presenting an already-used refresh token outside a 10-second grace window revokes
+  that whole session (it indicates theft). Inside the window it is only rejected, tolerating client races.
+* Suspending a user (`status = SUSPENDED`) blocks their access tokens immediately, plus refresh and login.
+* Password policy: 8–128 characters with at least one letter and one digit. Hashing: argon2id.
+* Login returns the same `401 Invalid email or password` for unknown emails and wrong passwords.
+
+## Roles and permissions
+
+Roles: `VOLUNTEER`, `ORGANIZATION`, `ADMIN`. Only the first two can self-register; admins come from the
+seed / database.
+
+```ts
+@Roles(Role.ORGANIZATION, Role.ADMIN)   // from common/decorators
+@Post()
+create(@CurrentUser() user: AuthenticatedUser) {}
+
+@Public()                               // opt out of authentication
+@Get()
+list() {}
+```
+
+* No decorator → any authenticated user. `@Roles(...)` → 403 for other roles. No token → 401.
+* Ownership rules (e.g. "organizations manage only their own projects") are enforced in services as the
+  features arrive in later phases.
+
 ## Testing
 
 ```bash
-npm test            # unit: pagination, DTO validation, error filter, env validation, health
-npm run test:e2e    # e2e: health + DB, error shape, helmet, CORS, Swagger, rate limiting
+npm test            # unit: auth/token/password services, RolesGuard, pagination, filter, env, health
+npm run test:e2e    # e2e (real DB): auth flows, multi-device, rotation/reuse, RBAC, suspension,
+                    #   brute-force throttling, health, error shape, helmet, CORS, Swagger
 ```
 
 ## Example requests
@@ -188,6 +258,22 @@ npm run test:e2e    # e2e: health + DB, error shape, helmet, CORS, Swagger, rate
 ```bash
 curl http://localhost:3000/health
 # {"status":"ok","database":"connected","uptime":12,"timestamp":"..."}
+
+# Register an organization
+curl -X POST http://localhost:3000/auth/register -H 'Content-Type: application/json' -d '{
+  "name": "Amina Benali", "email": "amina@example.com", "password": "Str0ngPassw0rd",
+  "role": "ORGANIZATION", "organizationName": "Green Hands Association" }'
+
+# Log in (seeded demo volunteer)
+curl -X POST http://localhost:3000/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"volunteer@athar.dev","password":"Volunteer#Demo2026"}'
+
+# Current user
+curl http://localhost:3000/auth/me -H "Authorization: Bearer $ACCESS_TOKEN"
+
+# Rotate tokens
+curl -X POST http://localhost:3000/auth/refresh -H 'Content-Type: application/json' \
+  -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}"
 ```
 
 ## Roadmap
@@ -195,8 +281,8 @@ curl http://localhost:3000/health
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Foundation | ✅ done |
-| 2 | Authentication, roles, guards | next |
-| 3 | Profiles & skills | |
+| 2 | Authentication, roles, guards, multi-device sessions | ✅ done |
+| 3 | Profiles & skills | next |
 | 4 | Projects | |
 | 5 | Applications | |
 | 6 | Matching | |

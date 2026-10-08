@@ -52,8 +52,6 @@ model User {
   name             String
   email            String        @unique
   passwordHash     String
-  /// Hash of the current refresh token (never the token itself). Null = logged out.
-  refreshTokenHash String?
   role             Role
   status           AccountStatus @default(ACTIVE)
   location         String?
@@ -65,6 +63,7 @@ model User {
   organizationProfile OrganizationProfile?
   skills              UserSkill[]
   applications        Application[]
+  refreshTokens       RefreshToken[]
 
   @@index([role, status])
   @@map("users")
@@ -102,6 +101,29 @@ model OrganizationProfile {
   projects Project[]
 
   @@map("organization_profiles")
+}
+
+/// One row per device session. Refresh tokens rotate on every use; all rotations of
+/// one login share a `familyId`, so reuse of a stolen/old token revokes only that session.
+model RefreshToken {
+  /// Also embedded in the JWT as the `sid` claim.
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  familyId   String    @db.Uuid
+  /// SHA-256 of the token. The token itself is never stored.
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  userAgent  String?
+  ip         String?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
 }
 
 // ───────────────────────────── Skills ─────────────────────────────

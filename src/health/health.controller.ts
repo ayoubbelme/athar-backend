@@ -3,9 +3,11 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { Response } from 'express';
 import { API_TAGS } from '../common/constants';
+import { Public } from '../common/decorators/public.decorator';
 import { HealthReport, HealthService } from './health.service';
 
 @ApiTags(API_TAGS.HEALTH)
+@Public()
 @SkipThrottle()
 @Controller('health')
 export class HealthController {

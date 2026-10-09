@@ -3,8 +3,8 @@
 Smart volunteering platform: connects young people's skills with volunteering opportunities and helps
 organizations manage projects and measure social impact.
 
-> **Status: Phase 4 — Projects complete** (on top of foundation, authentication, profiles & skills).
-> Applications, matching and impact are delivered in Phases 5–7 (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
+> **Status: Phase 5 — Applications complete** (on top of foundation, authentication, profiles & skills, projects).
+> Matching and impact are delivered in Phases 6–7 (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
 > that do not exist yet.
 
 ## Tech stack
@@ -122,6 +122,9 @@ src/
 ├── projects/               project CRUD, lifecycle, required skills, search/filter/sort
 │   ├── utils/              status state machine, visibility filter (pure, unit-tested)
 │   └── services/           ProjectsService (rules), ProjectSkillsService
+├── applications/           apply / review / withdraw, state machine, privacy mapper
+│   ├── utils/              application status machine (pure, unit-tested)
+│   └── services/           ApplicationsService (volunteer side), ApplicationReviewService (organization side)
 └── common/
     ├── constants/          pagination limits, Swagger tags
     ├── decorators/         @Public, @Roles, @CurrentUser, @Client
@@ -188,6 +191,15 @@ User 1─* Application *─1 Project   (unique: projectId + volunteerId)
 18. **Final projects are immutable and published projects are cancelled, not deleted,** so applications and
     impact data (Phases 5–7) are never orphaned. Admins can still delete for moderation.
 19. **One visibility rule for list and detail** (`buildVisibilityFilter`), so they cannot drift apart.
+20. **Withdraw is a state change, not a delete.** `DELETE /applications/:id` sets `WITHDRAWN`, keeping the history
+    for the organization and for Phase 7 impact figures. Re-applying reactivates the same row, which keeps the
+    `unique(projectId, volunteerId)` guarantee intact.
+21. **Capacity is enforced with a pessimistic row lock** (`SELECT … FOR UPDATE` on the project inside the
+    transaction). An e2e test fires 6 simultaneous accepts at a 1-spot project and expects exactly one success.
+22. **Applicant contact details are revealed only on acceptance**, a deliberate privacy default because
+    volunteers are often young people.
+23. **Applications are private resources:** accessing someone else's returns 404 (unlike public projects, which
+    return 403 on modification), so application ids cannot be probed.
 
 ### Known trade-offs
 
@@ -263,7 +275,7 @@ list() {}
 * Ownership rules (e.g. "organizations manage only their own projects") are enforced in services as the
   features arrive in later phases.
 
-## API reference (Phases 1–4)
+## API reference (Phases 1–5)
 
 All routes require `Authorization: Bearer <accessToken>` unless marked public. List endpoints return the
 paginated envelope (`page`, `limit` ≤ 100).
@@ -343,6 +355,41 @@ DRAFT ──► PUBLISHED ──► IN_PROGRESS ──► COMPLETED
 **Status code conventions:** `400` malformed input · `403` not allowed · `404` not found / not visible ·
 `409` conflicts with current state · `422` input is well-formed but violates a business rule.
 
+### Applications
+
+| Method | Path | Who | Description |
+| --- | --- | --- | --- |
+| POST | `/projects/:projectId/applications` | VOLUNTEER | Apply `{ message? }`. Only `PUBLISHED` projects. One per volunteer per project |
+| GET | `/projects/:projectId/applications?status=&sortBy=createdAt\|matchScore&order=` | project owner or ADMIN | Applicants with profile and skills |
+| GET | `/applications/my?status=&sortBy=&order=` | VOLUNTEER | My applications with project summary |
+| PATCH | `/applications/:id/status` | project owner or ADMIN | `{ status: ACCEPTED \| REJECTED }` |
+| DELETE | `/applications/:id` | VOLUNTEER (own) | Withdraw → `WITHDRAWN`, 204, idempotent |
+
+**State machine**
+
+```text
+PENDING ──► ACCEPTED ──► REJECTED          (organization decisions)
+   │            │
+   ├──► REJECTED  (final)
+   └──► WITHDRAWN ◄─────┘                  (volunteer, DELETE)
+
+WITHDRAWN ──► PENDING                      (volunteer applies again; reactivates the same application)
+```
+
+* Invalid transitions → `409`. Organizations can only send `ACCEPTED` or `REJECTED`; volunteers can only withdraw.
+* **Applying:** project must be `PUBLISHED` (else `409`) and visible to the volunteer (else `404`). A second
+  application while one is `PENDING`/`ACCEPTED`/`REJECTED` → `409`. Simultaneous duplicate requests are
+  resolved by the database unique constraint (exactly one succeeds).
+* **Capacity:** applying is never blocked by `maxVolunteers`, but *accepting* beyond it → `409`. The check runs
+  under a row lock on the project, so concurrent accepts cannot over-fill it. Rejecting or withdrawing frees a spot.
+* **Review window:** applications can be reviewed and withdrawn while the project is `PUBLISHED` or
+  `IN_PROGRESS`. Once it is `COMPLETED`/`CANCELLED` everything is frozen (history stays readable).
+* **Privacy:** an organization sees an applicant's name, location, availability, bio, experience and skills, but
+  their **email and phone only after the application is `ACCEPTED`** (`volunteer.contact` is `null` before).
+  Admins always see contact details.
+* **Isolation:** another volunteer's or organization's application behaves as non-existent (`404`).
+* `matchScore` is `null` until the Phase 6 matching module fills it in.
+
 ## Testing
 
 ```bash
@@ -381,8 +428,8 @@ curl -X POST http://localhost:3000/auth/refresh -H 'Content-Type: application/js
 | 1 | Foundation | ✅ done |
 | 2 | Authentication, roles, guards, multi-device sessions | ✅ done |
 | 3 | Profiles & skills | ✅ done |
-| 4 | Projects | next |
-| 5 | Applications | |
-| 6 | Matching | |
+| 4 | Projects | ✅ done |
+| 5 | Applications | ✅ done |
+| 6 | Matching | next |
 | 7 | Impact | |
 | 8 | Final quality review | |

@@ -142,7 +142,7 @@ export class ProjectsService {
   // ───────────────────────── Update ─────────────────────────
 
   async update(user: AuthenticatedUser, id: string, dto: UpdateProjectDto): Promise<ProjectView> {
-    const current = await this.loadManageable(user, id);
+    const current = await this.getManageableProject(user, id);
     this.assertModifiable(current.status);
 
     if (
@@ -192,7 +192,7 @@ export class ProjectsService {
     id: string,
     dto: ReplaceProjectSkillsDto,
   ): Promise<ProjectView> {
-    const current = await this.loadManageable(user, id);
+    const current = await this.getManageableProject(user, id);
     this.assertModifiable(current.status);
 
     await this.projectSkills.assertSkillsExist(dto.skills);
@@ -212,7 +212,7 @@ export class ProjectsService {
    * and impact data, so it is cancelled instead. Admins can remove any project (moderation).
    */
   async remove(user: AuthenticatedUser, id: string): Promise<void> {
-    const current = await this.loadManageable(user, id);
+    const current = await this.getManageableProject(user, id);
     if (user.role !== Role.ADMIN && current.status !== ProjectStatus.DRAFT) {
       throw new ConflictException(
         'Only draft projects can be deleted. Cancel the project instead.',
@@ -228,10 +228,10 @@ export class ProjectsService {
   }
 
   /**
-   * Loads a project the caller is allowed to modify: its owner, or an admin.
+   * Loads a project the caller is allowed to manage (also used by the applications module): its owner, or an admin.
    * Someone else's draft is reported as 404 so its existence is not revealed.
    */
-  private async loadManageable(user: AuthenticatedUser, id: string) {
+  async getManageableProject(user: AuthenticatedUser, id: string) {
     const project = await this.prisma.project.findUnique({
       where: { id },
       select: {

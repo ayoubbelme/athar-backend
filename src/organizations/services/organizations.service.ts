@@ -15,6 +15,15 @@ export class OrganizationsService {
     return profile;
   }
 
+  /** Lightweight lookup used by modules that need the caller's organization id. */
+  async findIdByUserId(userId: string): Promise<string | null> {
+    const profile = await this.prisma.organizationProfile.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+    return profile?.id ?? null;
+  }
+
   /** Location is mirrored onto the user row in the same transaction (see VolunteersService). */
   async updateMyProfile(
     userId: string,

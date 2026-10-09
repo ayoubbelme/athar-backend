@@ -11,6 +11,7 @@ import { RolesGuard } from './common/guards/roles.guard';
 import { HealthModule } from './health/health.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ProjectsModule } from './projects/projects.module';
 import { SkillsModule } from './skills/skills.module';
 import { UsersModule } from './users/users.module';
 import { VolunteersModule } from './volunteers/volunteers.module';
@@ -75,6 +76,7 @@ import { VolunteersModule } from './volunteers/volunteers.module';
     SkillsModule,
     VolunteersModule,
     OrganizationsModule,
+    ProjectsModule,
   ],
   // Order matters: throttle first, then authenticate, then authorize by role.
   providers: [

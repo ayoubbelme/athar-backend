@@ -3,8 +3,8 @@
 Smart volunteering platform: connects young people's skills with volunteering opportunities and helps
 organizations manage projects and measure social impact.
 
-> **Status: Phase 3 — Profiles & Skills complete** (on top of Phase 1 foundation and Phase 2 authentication).
-> Projects, applications, matching and impact are delivered in Phases 4–7 (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
+> **Status: Phase 4 — Projects complete** (on top of foundation, authentication, profiles & skills).
+> Applications, matching and impact are delivered in Phases 5–7 (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
 > that do not exist yet.
 
 ## Tech stack
@@ -119,6 +119,9 @@ src/
 ├── skills/                 skills catalog CRUD (admin) + search/pagination
 ├── volunteers/             own profile + the skills a volunteer holds (proficiency)
 ├── organizations/          own profile + public organization directory
+├── projects/               project CRUD, lifecycle, required skills, search/filter/sort
+│   ├── utils/              status state machine, visibility filter (pure, unit-tested)
+│   └── services/           ProjectsService (rules), ProjectSkillsService
 └── common/
     ├── constants/          pagination limits, Swagger tags
     ├── decorators/         @Public, @Roles, @CurrentUser, @Client
@@ -179,6 +182,12 @@ User 1─* Application *─1 Project   (unique: projectId + volunteerId)
     rejected with 409 instead of cascading. Skill names are unique ignoring case.
 16. **"Me" routes instead of ids.** Volunteers and organizations only ever address their own data
     (`/volunteers/me/...`), which makes cross-user access impossible by construction.
+17. **Ownership is derived, never supplied.** A project's organization comes from the authenticated user;
+    sending `organizationId` in a body is rejected. Other organizations get 403 on public projects and 404 on
+    drafts.
+18. **Final projects are immutable and published projects are cancelled, not deleted,** so applications and
+    impact data (Phases 5–7) are never orphaned. Admins can still delete for moderation.
+19. **One visibility rule for list and detail** (`buildVisibilityFilter`), so they cannot drift apart.
 
 ### Known trade-offs
 
@@ -254,7 +263,7 @@ list() {}
 * Ownership rules (e.g. "organizations manage only their own projects") are enforced in services as the
   features arrive in later phases.
 
-## API reference (Phases 1–3)
+## API reference (Phases 1–4)
 
 All routes require `Authorization: Bearer <accessToken>` unless marked public. List endpoints return the
 paginated envelope (`page`, `limit` ≤ 100).
@@ -297,6 +306,42 @@ paginated envelope (`page`, `limit` ≤ 100).
 | PATCH | `/users/:id/status` | ADMIN | `ACTIVE` ↔ `SUSPENDED`. Suspending revokes all sessions. Not allowed on yourself |
 
 **PATCH semantics:** omitted field = unchanged; `null` = clear (optional fields only); unknown fields → 400.
+
+### Projects
+
+| Method | Path | Who | Description |
+| --- | --- | --- | --- |
+| POST | `/projects` | ORGANIZATION | Create (owner = caller's organization). `DRAFT` by default, or `status: PUBLISHED`. Optional inline `skills` |
+| GET | `/projects` | any user | List / search / filter / sort (see below) |
+| GET | `/projects/:id` | any user | Detail incl. organization, required skills, `acceptedVolunteers` |
+| PATCH | `/projects/:id` | owner or ADMIN | Partial update; also moves the lifecycle via `status` |
+| PUT | `/projects/:id/skills` | owner or ADMIN | Replace the complete set of required skills (`[]` clears) |
+| DELETE | `/projects/:id` | owner (drafts only) or ADMIN | Published projects must be cancelled instead |
+
+**List query:** `search`, `location`, `status`, `skillId`, `organizationId`, `startDateFrom`, `startDateTo`,
+`sortBy=createdAt|startDate|endDate|title`, `order=asc|desc`, `page`, `limit`. Projects without dates always
+sort last. Unknown query parameters are rejected with 400.
+
+**Required skills:** `{ skillId, requiredCount (1–1000, default 1), importance (1–5, default 3) }`.
+`importance` is the weight the Phase 6 matching algorithm uses.
+
+**Visibility:** volunteers see public projects only (not drafts, not projects of suspended organizations);
+organizations additionally see their own drafts; admins see everything. A project you may not see returns
+`404` (never `403`) so drafts cannot be discovered.
+
+**Lifecycle:**
+
+```text
+DRAFT ──► PUBLISHED ──► IN_PROGRESS ──► COMPLETED
+  └──────────┴──────────────┴──────────► CANCELLED
+```
+
+* Invalid transitions → `409`. `COMPLETED` and `CANCELLED` are final: any modification → `409`.
+* `endDate` before `startDate` → `422`. Unknown required skill → `422`.
+* `maxVolunteers` cannot be lowered below the number of already accepted volunteers → `409`.
+
+**Status code conventions:** `400` malformed input · `403` not allowed · `404` not found / not visible ·
+`409` conflicts with current state · `422` input is well-formed but violates a business rule.
 
 ## Testing
 

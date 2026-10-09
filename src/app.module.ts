@@ -9,7 +9,11 @@ import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { HealthModule } from './health/health.module';
+import { OrganizationsModule } from './organizations/organizations.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { SkillsModule } from './skills/skills.module';
+import { UsersModule } from './users/users.module';
+import { VolunteersModule } from './volunteers/volunteers.module';
 
 @Module({
   imports: [
@@ -67,6 +71,10 @@ import { PrismaModule } from './prisma/prisma.module';
     PrismaModule,
     HealthModule,
     AuthModule,
+    UsersModule,
+    SkillsModule,
+    VolunteersModule,
+    OrganizationsModule,
   ],
   // Order matters: throttle first, then authenticate, then authorize by role.
   providers: [

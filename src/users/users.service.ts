@@ -35,6 +35,10 @@ export class UsersService {
     return this.prisma.user.findUnique({ where: { id }, select: PUBLIC_USER_SELECT });
   }
 
+  async updateName(id: string, name: string): Promise<PublicUser> {
+    return this.prisma.user.update({ where: { id }, data: { name }, select: PUBLIC_USER_SELECT });
+  }
+
   /** Includes passwordHash — only for credential verification inside the auth flow. */
   findByEmailWithPassword(email: string): Promise<User | null> {
     return this.prisma.user.findUnique({ where: { email } });

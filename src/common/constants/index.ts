@@ -19,3 +19,6 @@ export const API_TAGS = {
 } as const;
 
 export const BEARER_AUTH_NAME = 'access-token';
+
+export const SORT_ORDERS = ['asc', 'desc'] as const;
+export type SortOrder = (typeof SORT_ORDERS)[number];

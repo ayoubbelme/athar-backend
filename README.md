@@ -3,8 +3,8 @@
 Smart volunteering platform: connects young people's skills with volunteering opportunities and helps
 organizations manage projects and measure social impact.
 
-> **Status: Phase 2 — Authentication complete** (on top of the Phase 1 foundation). Profiles, skills,
-> projects, applications, matching and impact are delivered in Phases 3–7 (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
+> **Status: Phase 3 — Profiles & Skills complete** (on top of Phase 1 foundation and Phase 2 authentication).
+> Projects, applications, matching and impact are delivered in Phases 4–7 (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
 > that do not exist yet.
 
 ## Tech stack
@@ -115,7 +115,10 @@ src/
 │   ├── strategies/         JwtStrategy (loads user + status from DB per request)
 │   ├── guards/             JwtAuthGuard (global, secure by default)
 │   └── dto/ interfaces/ auth.constants.ts
-├── users/                  UsersService (public user projection), UserResponseDto
+├── users/                  UsersController (me + admin), UsersService, UsersAdminService
+├── skills/                 skills catalog CRUD (admin) + search/pagination
+├── volunteers/             own profile + the skills a volunteer holds (proficiency)
+├── organizations/          own profile + public organization directory
 └── common/
     ├── constants/          pagination limits, Swagger tags
     ├── decorators/         @Public, @Roles, @CurrentUser, @Client
@@ -170,6 +173,12 @@ User 1─* Application *─1 Project   (unique: projectId + volunteerId)
 12. **Role and status are read from the database, not the token.** The access token only carries the user id.
 13. **Registration creates the profile row** (empty `VolunteerProfile`, or `OrganizationProfile` named by
     `organizationName`) in the same transaction, so later phases can assume it exists.
+14. **Profile is the source of truth for `location`/`availability`**; the same values are mirrored onto the
+    user row in the same transaction so matching can read either consistently.
+15. **Skills are protected from silent data loss:** deleting a skill that volunteers or projects still use is
+    rejected with 409 instead of cascading. Skill names are unique ignoring case.
+16. **"Me" routes instead of ids.** Volunteers and organizations only ever address their own data
+    (`/volunteers/me/...`), which makes cross-user access impossible by construction.
 
 ### Known trade-offs
 
@@ -245,12 +254,56 @@ list() {}
 * Ownership rules (e.g. "organizations manage only their own projects") are enforced in services as the
   features arrive in later phases.
 
+## API reference (Phases 1–3)
+
+All routes require `Authorization: Bearer <accessToken>` unless marked public. List endpoints return the
+paginated envelope (`page`, `limit` ≤ 100).
+
+### Skills
+
+| Method | Path | Who | Description |
+| --- | --- | --- | --- |
+| GET | `/skills?search=&sortBy=name\|createdAt&order=asc\|desc&page=&limit=` | any user | List / search |
+| GET | `/skills/:id` | any user | Get one |
+| POST | `/skills` | ADMIN | Create (name unique, case-insensitive) |
+| PATCH | `/skills/:id` | ADMIN | Update name/description |
+| DELETE | `/skills/:id` | ADMIN | Delete. **409 while any volunteer or project still uses it** |
+
+### Volunteers (VOLUNTEER only, always the caller's own data)
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET / PATCH | `/volunteers/me` | Profile: `bio, phone, location, availability, experience` |
+| GET | `/volunteers/me/skills` | My skills with proficiency |
+| POST | `/volunteers/me/skills` | Add `{ skillId, proficiency? }` (default `BEGINNER`; 409 if already added) |
+| PATCH | `/volunteers/me/skills/:skillId` | Change proficiency |
+| DELETE | `/volunteers/me/skills/:skillId` | Remove |
+
+### Organizations
+
+| Method | Path | Who | Description |
+| --- | --- | --- | --- |
+| GET | `/organizations?search=&location=` | any user | Directory (suspended organizations hidden) |
+| GET | `/organizations/:id` | any user | Public profile |
+| GET / PATCH | `/organizations/me` | ORGANIZATION | Own profile: `name, description, logo, location, website, contactEmail` |
+
+### Users
+
+| Method | Path | Who | Description |
+| --- | --- | --- | --- |
+| PATCH | `/users/me` | any user | Change own display name |
+| GET | `/users?role=&status=&search=` | ADMIN | List / filter users |
+| GET | `/users/:id` | ADMIN | Get a user |
+| PATCH | `/users/:id/status` | ADMIN | `ACTIVE` ↔ `SUSPENDED`. Suspending revokes all sessions. Not allowed on yourself |
+
+**PATCH semantics:** omitted field = unchanged; `null` = clear (optional fields only); unknown fields → 400.
+
 ## Testing
 
 ```bash
-npm test            # unit: auth/token/password services, RolesGuard, pagination, filter, env, health
-npm run test:e2e    # e2e (real DB): auth flows, multi-device, rotation/reuse, RBAC, suspension,
-                    #   brute-force throttling, health, error shape, helmet, CORS, Swagger
+npm test            # unit: auth, skills, volunteers, organizations, users-admin, RolesGuard, pagination, filter, env, health
+npm run test:e2e    # e2e (real DB): auth, multi-device, RBAC, suspension, throttling, profiles, skills,
+                    #   user administration, health, error shape, helmet, CORS, Swagger
 ```
 
 ## Example requests
@@ -282,8 +335,8 @@ curl -X POST http://localhost:3000/auth/refresh -H 'Content-Type: application/js
 | --- | --- | --- |
 | 1 | Foundation | ✅ done |
 | 2 | Authentication, roles, guards, multi-device sessions | ✅ done |
-| 3 | Profiles & skills | next |
-| 4 | Projects | |
+| 3 | Profiles & skills | ✅ done |
+| 4 | Projects | next |
 | 5 | Applications | |
 | 6 | Matching | |
 | 7 | Impact | |

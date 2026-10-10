@@ -3,8 +3,7 @@
 Smart volunteering platform: connects young people's skills with volunteering opportunities and helps
 organizations manage projects and measure social impact.
 
-> **Status: Phase 6 — Matching complete** (on top of foundation, authentication, profiles & skills, projects, applications).
-> Impact is delivered in Phase 7 (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
+> **Status: Phase 7 — Impact complete.** Only the Phase 8 final quality review remains. (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
 > that do not exist yet.
 
 ## Tech stack
@@ -127,6 +126,8 @@ src/
 │   ├── strategies/         RuleBasedMatchStrategy (pure, deterministic)
 │   ├── interfaces/         MatchStrategy contract + MATCH_STRATEGY injection token
 │   └── services/           MatchingService (loads data, delegates scoring)
+├── impact/                 project impact records + organization / platform statistics
+│   └── services/           ImpactService (records), ImpactStatsService (DB-side aggregation)
 │   ├── utils/              application status machine (pure, unit-tested)
 │   └── services/           ApplicationsService (volunteer side), ApplicationReviewService (organization side)
 └── common/
@@ -213,6 +214,15 @@ User 1─* Application *─1 Project   (unique: projectId + volunteerId)
     deterministic and explainable. Extending the lists is a one-line enum change plus a migration.
 27. **Migrations preserve data:** the availability migration converts existing free text (e.g. "Weekends and
     evenings") to the new values instead of dropping it.
+28. **Impact is its own resource with its own lifecycle gate.** It is recorded while a project runs or after it
+    finished, and stays correctable after completion even though the project is frozen, because reports are often
+    finalized late.
+29. **Autofilled but editable `volunteersCount`, with the live count alongside**, to keep reported figures close to
+    the application data while allowing real-world exceptions, visibly.
+30. **Statistics are aggregated by the database** (`aggregate`, `groupBy` and parameterized raw SQL for joins),
+    scoped by organization id in the query itself, so cross-organization leakage is structurally impossible.
+31. **Defense in depth for figures:** DTO validation, `CHECK (>= 0)` constraints, exact `DECIMAL(10,2)` hours, and
+    cancelled projects excluded from every aggregate.
 
 ### Known trade-offs
 
@@ -295,7 +305,7 @@ list() {}
 * Ownership rules (e.g. "organizations manage only their own projects") are enforced in services as the
   features arrive in later phases.
 
-## API reference (Phases 1–6)
+## API reference (Phases 1–7)
 
 All routes require `Authorization: Bearer <accessToken>` unless marked public. List endpoints return the
 paginated envelope (`page`, `limit` ≤ 100).
@@ -490,6 +500,56 @@ Implement it (e.g. calling an ML service; the method is async for that reason) a
 `matching.module.ts`: `{ provide: MATCH_STRATEGY, useClass: YourStrategy }`. Controllers, projects and applications
 do not change. `MatchResult.strategy` records which algorithm produced a score.
 
+### Impact
+
+| Method | Path | Who | Description |
+| --- | --- | --- | --- |
+| POST | `/projects/:projectId/impact` | project owner or ADMIN | Record impact (one record per project) |
+| GET | `/projects/:projectId/impact` | any user who can see the project | Read it |
+| PATCH | `/projects/:projectId/impact` | project owner or ADMIN | Partial update |
+| GET | `/impact/organization` | ORGANIZATION (own) · ADMIN (`?organizationId=` required) | Organization statistics |
+| GET | `/impact/platform` | ADMIN | Platform-wide statistics |
+
+**Fields:** `volunteersCount`, `hours` (decimal, max 2 places, ≤ 9 999 999), `activitiesCount`, `beneficiariesCount`,
+`resources` (text), `description` (text). Counts are non-negative integers; unknown fields are rejected.
+Responses also contain `acceptedVolunteers`, the live number of `ACCEPTED` applications.
+
+**Rules**
+
+* Impact can only be **recorded and updated while the project is `IN_PROGRESS` or `COMPLETED`** (`409` otherwise,
+  also for `CANCELLED`). It stays editable after completion so reports can be corrected, although the project
+  itself is frozen.
+* **`volunteersCount` defaults to the number of accepted applications** when omitted on creation, and can be
+  overridden (e.g. walk-ins who never used the app). Because it is editable, `acceptedVolunteers` is returned next
+  to it so any difference stays visible.
+* A second `POST` → `409` (also under simultaneous requests: unique constraint). `GET`/`PATCH` before anything was
+  recorded → `404` ("No impact has been recorded…"); a project you cannot see → `404` ("Project not found").
+* Impact is **readable by anyone who can see the project** (a showcase of results); writing is owner/admin only.
+* The database also enforces `CHECK` constraints (all figures ≥ 0). `metrics` (JSON) exists in the table as the
+  extension point for future measures, e.g. CO₂ saved; it is deliberately not exposed through the API yet.
+
+**Statistics.** Aggregates are computed in the database (`SUM`/`COUNT`/`GROUP BY`), never by loading records:
+
+```json
+{
+  "organizationId": "…",
+  "projects": { "total": 7, "draft": 1, "published": 1, "inProgress": 1, "completed": 3, "cancelled": 1 },
+  "impact": { "projectsWithImpact": 4, "volunteersCount": 20, "hours": 200.75, "activitiesCount": 8, "beneficiariesCount": 350 },
+  "uniqueVolunteers": 2,
+  "byCategory": [
+    { "category": "HEALTH", "projectsWithImpact": 2, "volunteersCount": 15, "hours": 150.75, "activitiesCount": 6, "beneficiariesCount": 300 },
+    { "category": null,     "projectsWithImpact": 1, "volunteersCount": 2,  "hours": 20,     "activitiesCount": 1, "beneficiariesCount": 10 }
+  ]
+}
+```
+
+* **Cancelled projects are excluded** from impact totals, `byCategory` and `uniqueVolunteers`.
+* `uniqueVolunteers` = distinct volunteers with an `ACCEPTED` application (a volunteer helping two organizations counts
+  once platform-wide and once per organization). `category: null` groups projects without a category.
+* `/impact/organization` only ever covers that organization's projects: an organization asking for another one's
+  id gets `403`. `/impact/platform` additionally returns `organizations` and `volunteers` (ACTIVE accounts).
+  It is admin-only for now; opening these anonymous totals to every logged-in user is a one-line `@Roles` change.
+
 ## Testing
 
 ```bash
@@ -531,5 +591,5 @@ curl -X POST http://localhost:3000/auth/refresh -H 'Content-Type: application/js
 | 4 | Projects | ✅ done |
 | 5 | Applications | ✅ done |
 | 6 | Matching | ✅ done |
-| 7 | Impact | next |
-| 8 | Final quality review | |
+| 7 | Impact | ✅ done |
+| 8 | Final quality review | next |

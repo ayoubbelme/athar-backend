@@ -10,6 +10,7 @@ import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { HealthModule } from './health/health.module';
+import { ImpactModule } from './impact/impact.module';
 import { MatchingModule } from './matching/matching.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -81,6 +82,7 @@ import { VolunteersModule } from './volunteers/volunteers.module';
     ProjectsModule,
     ApplicationsModule,
     MatchingModule,
+    ImpactModule,
   ],
   // Order matters: throttle first, then authenticate, then authorize by role.
   providers: [

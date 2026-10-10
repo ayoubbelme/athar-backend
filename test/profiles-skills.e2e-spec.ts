@@ -178,27 +178,54 @@ describe('Profiles, skills and user administration (e2e)', () => {
           bio: '  Loves helping  ',
           phone: '+213 555 12 34 56',
           location: 'Algiers',
-          availability: 'Weekends',
+          availability: ['WEEKENDS', 'EVENINGS'],
+          interests: ['HEALTH', 'EDUCATION'],
         })
         .expect(200);
       expect(res.body).toMatchObject({
         bio: 'Loves helping',
         location: 'Algiers',
-        availability: 'Weekends',
+        availability: ['WEEKENDS', 'EVENINGS'],
+        interests: ['HEALTH', 'EDUCATION'],
       });
 
       const me = await as(volunteer).get('/auth/me').expect(200);
-      expect(me.body).toMatchObject({ location: 'Algiers', availability: 'Weekends' });
+      expect(me.body).toMatchObject({
+        location: 'Algiers',
+        availability: ['WEEKENDS', 'EVENINGS'],
+      });
 
       const cleared = await as(volunteer).patch('/volunteers/me').send({ bio: null }).expect(200);
       expect(cleared.body.bio).toBeNull();
       expect(cleared.body.location).toBe('Algiers'); // untouched
+      expect(cleared.body.availability).toEqual(['WEEKENDS', 'EVENINGS']); // untouched
+    });
+
+    it('replaces the availability / interests sets and clears them with []', async () => {
+      const replaced = await as(volunteer)
+        .patch('/volunteers/me')
+        .send({ availability: ['FLEXIBLE'], interests: ['SPORTS'] })
+        .expect(200);
+      expect(replaced.body).toMatchObject({ availability: ['FLEXIBLE'], interests: ['SPORTS'] });
+
+      const cleared = await as(volunteer)
+        .patch('/volunteers/me')
+        .send({ availability: [], interests: [] })
+        .expect(200);
+      expect(cleared.body).toMatchObject({ availability: [], interests: [] });
+      expect((await as(volunteer).get('/auth/me').expect(200)).body.availability).toEqual([]);
     });
 
     it.each([
       ['invalid phone', { phone: 'abc' }],
       ['too-long bio', { bio: 'x'.repeat(1001) }],
       ['non-whitelisted field (userId)', { userId: '00000000-0000-4000-8000-000000000000' }],
+      ['free-text availability (now a fixed set)', { availability: 'Weekends' }],
+      ['unknown availability value', { availability: ['NIGHTS'] }],
+      ['duplicate availability values', { availability: ['WEEKENDS', 'WEEKENDS'] }],
+      ['null availability (use [] to clear)', { availability: null }],
+      ['unknown interest', { interests: ['GAMING'] }],
+      ['interests that are not an array', { interests: 'HEALTH' }],
     ])('rejects %s with 400', async (_l, body) => {
       await as(volunteer).patch('/volunteers/me').send(body).expect(400);
     });

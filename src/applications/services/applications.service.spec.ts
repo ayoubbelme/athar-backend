@@ -2,6 +2,7 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ApplicationStatus as A, Prisma, ProjectStatus as P, Role } from '@prisma/client';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { MatchingService } from '../../matching/services/matching.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ListMyApplicationsQueryDto } from '../dto/application.dto';
 import { ApplicationsService } from './applications.service';
@@ -33,13 +34,14 @@ describe('ApplicationsService (volunteer side)', () => {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
       findMany: jest.fn(),
-      findUniqueOrThrow: jest.fn(),
       count: jest.fn(),
       create: jest.fn(),
+      update: jest.fn(),
       updateMany: jest.fn(),
     },
     $transaction: jest.fn(),
   };
+  const matching = { scoreForApplication: jest.fn() };
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -47,9 +49,14 @@ describe('ApplicationsService (volunteer side)', () => {
     prisma.project.findFirst.mockResolvedValue({ id: 'p1', status: P.PUBLISHED });
     prisma.application.findUnique.mockResolvedValue(null);
     prisma.application.create.mockResolvedValue({ id: 'a1' });
-    prisma.application.findUniqueOrThrow.mockResolvedValue(appRow);
+    prisma.application.update.mockResolvedValue({ ...appRow, matchScore: 87 });
+    matching.scoreForApplication.mockResolvedValue(87);
     const moduleRef = await Test.createTestingModule({
-      providers: [ApplicationsService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        ApplicationsService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: MatchingService, useValue: matching },
+      ],
     }).compile();
     service = moduleRef.get(ApplicationsService);
   });
@@ -63,6 +70,23 @@ describe('ApplicationsService (volunteer side)', () => {
       });
       expect(view).toMatchObject({ id: 'a1', status: 'PENDING', project: { id: 'p1' } });
       expect(view).not.toHaveProperty('volunteerId');
+    });
+
+    it('stores the match score computed at application time', async () => {
+      const view = await service.apply(vol, 'p1', {});
+      expect(matching.scoreForApplication).toHaveBeenCalledWith('v1', 'p1');
+      expect(prisma.application.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'a1' }, data: { matchScore: 87 } }),
+      );
+      expect(view.matchScore).toBe(87);
+    });
+
+    it('still lets the volunteer apply when matching is unavailable (score stays empty)', async () => {
+      matching.scoreForApplication.mockResolvedValue(null);
+      prisma.application.update.mockResolvedValue({ ...appRow, matchScore: null });
+      const view = await service.apply(vol, 'p1', {});
+      expect(prisma.application.update.mock.calls[0][0].data).toEqual({ matchScore: null });
+      expect(view.matchScore).toBeNull();
     });
 
     it('uses the public-visibility filter, so drafts / hidden projects are 404', async () => {

@@ -3,6 +3,7 @@ import { ApplicationStatus, Prisma } from '@prisma/client';
 import { PaginatedResult } from '../../common/dto/paginated-response.dto';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { buildPaginatedResult, toPrismaPagination } from '../../common/utils/pagination.util';
+import { MatchingService } from '../../matching/services/matching.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { buildVisibilityFilter } from '../../projects/utils/project-visibility.util';
 import {
@@ -20,7 +21,10 @@ import {
 /** The volunteer's side of applications. Every query is scoped to the caller. */
 @Injectable()
 export class ApplicationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly matching: MatchingService,
+  ) {}
 
   async apply(
     volunteer: AuthenticatedUser,
@@ -45,8 +49,11 @@ export class ApplicationsService {
       ? await this.reapply(existing, dto)
       : await this.createApplication(projectId, volunteer.id, dto);
 
-    const row = await this.prisma.application.findUniqueOrThrow({
+    // Snapshot of how well the volunteer fits right now (null if matching is unavailable).
+    const matchScore = await this.matching.scoreForApplication(volunteer.id, projectId);
+    const row = await this.prisma.application.update({
       where: { id },
+      data: { matchScore },
       include: MY_APPLICATION_INCLUDE,
     });
     return toMyApplicationView(row);

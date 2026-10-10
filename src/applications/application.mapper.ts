@@ -1,4 +1,12 @@
-import { ApplicationStatus, Prisma, ProficiencyLevel, ProjectStatus, Role } from '@prisma/client';
+import {
+  ApplicationStatus,
+  Availability,
+  Prisma,
+  ProficiencyLevel,
+  ProjectCategory,
+  ProjectStatus,
+  Role,
+} from '@prisma/client';
 
 /** Volunteer's own view: the project they applied to. */
 export const MY_APPLICATION_INCLUDE = {
@@ -23,8 +31,9 @@ export const REVIEW_APPLICATION_INCLUDE = {
       name: true,
       email: true,
       location: true,
-      availability: true,
-      volunteerProfile: { select: { bio: true, phone: true, experience: true } },
+      volunteerProfile: {
+        select: { bio: true, phone: true, experience: true, availability: true, interests: true },
+      },
       skills: {
         include: { skill: { select: { id: true, name: true } } },
         orderBy: { skill: { name: 'asc' } },
@@ -64,7 +73,8 @@ export interface ReviewApplicationView {
     id: string;
     name: string;
     location: string | null;
-    availability: string | null;
+    availability: Availability[];
+    interests: ProjectCategory[];
     bio: string | null;
     experience: string | null;
     skills: Array<{ id: string; name: string; proficiency: ProficiencyLevel }>;
@@ -104,7 +114,8 @@ export const toReviewApplicationView = (
       id: volunteer.id,
       name: volunteer.name,
       location: volunteer.location,
-      availability: volunteer.availability,
+      availability: volunteer.volunteerProfile?.availability ?? [],
+      interests: volunteer.volunteerProfile?.interests ?? [],
       bio: volunteer.volunteerProfile?.bio ?? null,
       experience: volunteer.volunteerProfile?.experience ?? null,
       skills: volunteer.skills.map((s) => ({

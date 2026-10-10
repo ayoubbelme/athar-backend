@@ -19,56 +19,10 @@ import {
 } from '../dto/project.dto';
 import { canTransition, isTerminal } from '../utils/project-status.util';
 import { buildVisibilityFilter } from '../utils/project-visibility.util';
+import { PROJECT_INCLUDE, ProjectView, toProjectView } from '../project.mapper';
 import { ProjectSkillsService } from './project-skills.service';
 
-const PROJECT_INCLUDE = {
-  organization: { select: { id: true, name: true, logo: true, location: true } },
-  skills: {
-    include: { skill: { select: { id: true, name: true } } },
-    orderBy: { skill: { name: 'asc' } },
-  },
-  _count: { select: { applications: { where: { status: ApplicationStatus.ACCEPTED } } } },
-} satisfies Prisma.ProjectInclude;
-
-type ProjectRow = Prisma.ProjectGetPayload<{ include: typeof PROJECT_INCLUDE }>;
-
-export interface ProjectView {
-  id: string;
-  organizationId: string;
-  title: string;
-  description: string;
-  location: string | null;
-  startDate: Date | null;
-  endDate: Date | null;
-  status: ProjectStatus;
-  maxVolunteers: number | null;
-  acceptedVolunteers: number;
-  organization: ProjectRow['organization'];
-  skills: Array<{ skill: { id: string; name: string }; requiredCount: number; importance: number }>;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-const toView = (row: ProjectRow): ProjectView => ({
-  id: row.id,
-  organizationId: row.organizationId,
-  title: row.title,
-  description: row.description,
-  location: row.location,
-  startDate: row.startDate,
-  endDate: row.endDate,
-  status: row.status,
-  maxVolunteers: row.maxVolunteers,
-  acceptedVolunteers: row._count.applications,
-  organization: row.organization,
-  skills: row.skills.map((s) => ({
-    skill: s.skill,
-    requiredCount: s.requiredCount,
-    importance: s.importance,
-  })),
-  createdAt: row.createdAt,
-  updatedAt: row.updatedAt,
-});
+export type { ProjectView };
 
 @Injectable()
 export class ProjectsService {
@@ -97,6 +51,8 @@ export class ProjectsService {
         startDate: dto.startDate,
         endDate: dto.endDate,
         maxVolunteers: dto.maxVolunteers,
+        category: dto.category,
+        availability: dto.availability,
         status: dto.status ?? ProjectStatus.DRAFT,
         ...(dto.skills?.length
           ? { skills: { create: this.projectSkills.toCreateData(dto.skills) } }
@@ -104,7 +60,7 @@ export class ProjectsService {
       },
       include: PROJECT_INCLUDE,
     });
-    return toView(row);
+    return toProjectView(row);
   }
 
   // ───────────────────────── Read ─────────────────────────
@@ -125,7 +81,7 @@ export class ProjectsService {
       }),
       this.prisma.project.count({ where }),
     ]);
-    return buildPaginatedResult(rows.map(toView), total, query);
+    return buildPaginatedResult(rows.map(toProjectView), total, query);
   }
 
   async findOne(user: AuthenticatedUser, id: string): Promise<ProjectView> {
@@ -136,7 +92,7 @@ export class ProjectsService {
     });
     // Same 404 for "does not exist" and "not allowed to see" (e.g. someone else's draft).
     if (!row) throw new NotFoundException('Project not found');
-    return toView(row);
+    return toProjectView(row);
   }
 
   // ───────────────────────── Update ─────────────────────────
@@ -180,11 +136,13 @@ export class ProjectsService {
         startDate: dto.startDate,
         endDate: dto.endDate,
         maxVolunteers: dto.maxVolunteers,
+        category: dto.category,
+        availability: dto.availability,
         status: dto.status,
       },
       include: PROJECT_INCLUDE,
     });
-    return toView(row);
+    return toProjectView(row);
   }
 
   async replaceSkills(
@@ -202,7 +160,7 @@ export class ProjectsService {
       where: { id },
       include: PROJECT_INCLUDE,
     });
-    return toView(row);
+    return toProjectView(row);
   }
 
   // ───────────────────────── Delete ─────────────────────────
@@ -270,6 +228,7 @@ export class ProjectsService {
   private buildFilters(query: ListProjectsQueryDto): Prisma.ProjectWhereInput {
     return {
       ...(query.status ? { status: query.status } : {}),
+      ...(query.category ? { category: query.category } : {}),
       ...(query.organizationId ? { organizationId: query.organizationId } : {}),
       ...(query.location ? { location: { contains: query.location, mode: 'insensitive' } } : {}),
       ...(query.skillId ? { skills: { some: { skillId: query.skillId } } } : {}),

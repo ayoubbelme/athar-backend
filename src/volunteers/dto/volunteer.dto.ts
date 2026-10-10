@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayUnique,
+  IsArray,
   IsEnum,
   IsOptional,
   IsString,
@@ -9,7 +12,7 @@ import {
   MaxLength,
   ValidateIf,
 } from 'class-validator';
-import { ProficiencyLevel } from '@prisma/client';
+import { Availability, ProficiencyLevel, ProjectCategory } from '@prisma/client';
 import { trim } from '../../common/utils/transform.util';
 
 const PHONE_REGEX = /^\+?[0-9][0-9\s\-().]{5,19}$/;
@@ -36,12 +39,31 @@ export class UpdateVolunteerProfileDto {
   @MaxLength(100)
   location?: string | null;
 
-  @ApiPropertyOptional({ example: 'Weekends and evenings', maxLength: 200, nullable: true })
-  @IsOptional()
-  @Transform(trim)
-  @IsString()
-  @MaxLength(200)
-  availability?: string | null;
+  @ApiPropertyOptional({
+    enum: Availability,
+    isArray: true,
+    example: ['WEEKENDS', 'EVENINGS'],
+    description: 'Replaces the set; [] clears it. FLEXIBLE = any time.',
+  })
+  @ValidateIf((_o, v) => v !== undefined)
+  @IsArray()
+  @ArrayUnique()
+  @ArrayMaxSize(4)
+  @IsEnum(Availability, { each: true })
+  availability?: Availability[];
+
+  @ApiPropertyOptional({
+    enum: ProjectCategory,
+    isArray: true,
+    example: ['HEALTH', 'EDUCATION'],
+    description: 'Causes you care about; used by matching. Replaces the set; [] clears it.',
+  })
+  @ValidateIf((_o, v) => v !== undefined)
+  @IsArray()
+  @ArrayUnique()
+  @ArrayMaxSize(9)
+  @IsEnum(ProjectCategory, { each: true })
+  interests?: ProjectCategory[];
 
   @ApiPropertyOptional({ maxLength: 2000, nullable: true })
   @IsOptional()
@@ -57,7 +79,8 @@ export class VolunteerProfileResponseDto {
   @ApiPropertyOptional({ nullable: true }) bio: string | null;
   @ApiPropertyOptional({ nullable: true }) phone: string | null;
   @ApiPropertyOptional({ nullable: true }) location: string | null;
-  @ApiPropertyOptional({ nullable: true }) availability: string | null;
+  @ApiProperty({ enum: Availability, isArray: true }) availability: Availability[];
+  @ApiProperty({ enum: ProjectCategory, isArray: true }) interests: ProjectCategory[];
   @ApiPropertyOptional({ nullable: true }) experience: string | null;
   @ApiProperty() createdAt: Date;
   @ApiProperty() updatedAt: Date;

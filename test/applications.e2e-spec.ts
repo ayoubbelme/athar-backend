@@ -193,7 +193,7 @@ describe('Applications (e2e)', () => {
       expect(res.body).toMatchObject({
         status: 'PENDING',
         message: 'Count me in',
-        matchScore: null,
+        matchScore: 0, // computed on apply; this project specifies no requirements, so nothing to score
         project: { id: project.id, status: 'PUBLISHED', organization: { name: `Org A ${RUN}` } },
       });
       expect(res.body.volunteerId).toBeUndefined();

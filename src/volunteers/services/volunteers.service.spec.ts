@@ -38,10 +38,10 @@ describe('VolunteersService', () => {
   });
 
   it('mirrors location and availability onto the user in the same transaction', async () => {
-    await service.updateMyProfile('u1', { location: 'Algiers', availability: null, bio: 'x' });
+    await service.updateMyProfile('u1', { location: 'Algiers', availability: [], bio: 'x' });
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 'u1' },
-      data: { location: 'Algiers', availability: null },
+      data: { location: 'Algiers', availability: [] },
     });
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });

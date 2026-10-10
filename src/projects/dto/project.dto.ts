@@ -3,6 +3,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayUnique,
+  IsArray,
   IsDate,
   IsEnum,
   IsIn,
@@ -17,7 +18,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { ProjectStatus } from '@prisma/client';
+import { Availability, ProjectCategory, ProjectStatus } from '@prisma/client';
 import { SORT_ORDERS, SortOrder } from '../../common/constants';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { trim } from '../../common/utils/transform.util';
@@ -114,6 +115,26 @@ export class CreateProjectDto {
   @Max(10000)
   maxVolunteers?: number;
 
+  @ApiPropertyOptional({
+    enum: ProjectCategory,
+    description: "Matched against volunteers' interests",
+  })
+  @IsOptional()
+  @IsEnum(ProjectCategory)
+  category?: ProjectCategory;
+
+  @ApiPropertyOptional({
+    enum: Availability,
+    isArray: true,
+    description: 'When volunteers are needed. Empty or FLEXIBLE = no constraint.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @ArrayMaxSize(4)
+  @IsEnum(Availability, { each: true })
+  availability?: Availability[];
+
   @ApiPropertyOptional({ enum: CREATABLE_STATUSES, default: ProjectStatus.DRAFT })
   @ValidateIf((_o, v) => v !== undefined)
   @IsIn(CREATABLE_STATUSES)
@@ -177,6 +198,23 @@ export class UpdateProjectDto {
   @Max(10000)
   maxVolunteers?: number | null;
 
+  @ApiPropertyOptional({ enum: ProjectCategory, nullable: true })
+  @IsOptional()
+  @IsEnum(ProjectCategory)
+  category?: ProjectCategory | null;
+
+  @ApiPropertyOptional({
+    enum: Availability,
+    isArray: true,
+    description: 'Replaces the set; [] clears it.',
+  })
+  @ValidateIf((_o, v) => v !== undefined)
+  @IsArray()
+  @ArrayUnique()
+  @ArrayMaxSize(4)
+  @IsEnum(Availability, { each: true })
+  availability?: Availability[];
+
   @ApiPropertyOptional({
     enum: ProjectStatus,
     description:
@@ -210,6 +248,11 @@ export class ListProjectsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(ProjectStatus)
   status?: ProjectStatus;
+
+  @ApiPropertyOptional({ enum: ProjectCategory })
+  @IsOptional()
+  @IsEnum(ProjectCategory)
+  category?: ProjectCategory;
 
   @ApiPropertyOptional({ format: 'uuid', description: 'Projects requiring this skill' })
   @IsOptional()
@@ -274,6 +317,8 @@ export class ProjectResponseDto {
   @ApiPropertyOptional({ nullable: true }) endDate: Date | null;
   @ApiProperty({ enum: ProjectStatus }) status: ProjectStatus;
   @ApiPropertyOptional({ nullable: true }) maxVolunteers: number | null;
+  @ApiPropertyOptional({ enum: ProjectCategory, nullable: true }) category: ProjectCategory | null;
+  @ApiProperty({ enum: Availability, isArray: true }) availability: Availability[];
   @ApiProperty({ description: 'Number of ACCEPTED applications' }) acceptedVolunteers: number;
   @ApiProperty({ type: ProjectOrganizationDto }) organization: ProjectOrganizationDto;
   @ApiProperty({ type: [ProjectSkillResponseDto] }) skills: ProjectSkillResponseDto[];

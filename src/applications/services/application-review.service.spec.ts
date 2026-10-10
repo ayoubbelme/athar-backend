@@ -28,8 +28,13 @@ const reviewRow = (status: A) => ({
     name: 'Vol',
     email: 'vol@example.com',
     location: null,
-    availability: null,
-    volunteerProfile: { bio: null, phone: '123', experience: null },
+    volunteerProfile: {
+      bio: null,
+      phone: '123',
+      experience: null,
+      availability: [],
+      interests: [],
+    },
     skills: [],
   },
 });

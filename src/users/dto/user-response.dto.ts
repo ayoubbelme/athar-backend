@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { AccountStatus, Role } from '@prisma/client';
+import { AccountStatus, Availability, Role } from '@prisma/client';
 
 /** Public representation of a user. Never includes credentials. */
 export class UserResponseDto {
@@ -9,7 +9,7 @@ export class UserResponseDto {
   @ApiProperty({ enum: Role }) role: Role;
   @ApiProperty({ enum: AccountStatus }) status: AccountStatus;
   @ApiPropertyOptional({ nullable: true }) location: string | null;
-  @ApiPropertyOptional({ nullable: true }) availability: string | null;
+  @ApiProperty({ enum: Availability, isArray: true }) availability: Availability[];
   @ApiProperty() createdAt: Date;
   @ApiProperty() updatedAt: Date;
 }

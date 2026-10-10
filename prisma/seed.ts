@@ -5,12 +5,15 @@
 import { PrismaPg } from '@prisma/adapter-pg';
 import {
   ApplicationStatus,
+  Availability,
   PrismaClient,
   ProficiencyLevel,
+  ProjectCategory,
   ProjectStatus,
   Role,
 } from '@prisma/client';
 import * as argon2 from 'argon2';
+import { RuleBasedMatchStrategy } from '../src/matching/strategies/rule-based-match.strategy';
 
 const DEMO_PASSWORDS = {
   admin: 'Admin#Demo2026',
@@ -70,16 +73,30 @@ async function main(): Promise<void> {
         passwordHash: await argon2.hash(DEMO_PASSWORDS.volunteer),
         role: Role.VOLUNTEER,
         location: 'Algiers',
-        availability: 'Weekends',
+        availability: [Availability.WEEKENDS, Availability.EVENINGS],
         volunteerProfile: {
           create: {
             bio: 'Student who enjoys community work.',
             location: 'Algiers',
-            availability: 'Weekends',
+            availability: [Availability.WEEKENDS, Availability.EVENINGS],
+            interests: [ProjectCategory.HEALTH, ProjectCategory.COMMUNITY],
             experience: 'Helped organize two neighbourhood clean-up days.',
           },
         },
       },
+    });
+
+    // Backfill fields introduced after the first seed (idempotent).
+    await prisma.volunteerProfile.update({
+      where: { userId: volunteer.id },
+      data: {
+        availability: [Availability.WEEKENDS, Availability.EVENINGS],
+        interests: [ProjectCategory.HEALTH, ProjectCategory.COMMUNITY],
+      },
+    });
+    await prisma.user.update({
+      where: { id: volunteer.id },
+      data: { availability: [Availability.WEEKENDS, Availability.EVENINGS] },
     });
 
     const orgUser = await prisma.user.upsert({
@@ -127,6 +144,8 @@ async function main(): Promise<void> {
         description: string;
         status: ProjectStatus;
         maxVolunteers: number;
+        category: ProjectCategory;
+        availability: Availability[];
         startDate: Date;
         endDate: Date;
       },
@@ -135,11 +154,15 @@ async function main(): Promise<void> {
       const existing = await prisma.project.findFirst({
         where: { organizationId: organization.id, title: data.title },
       });
-      const project =
-        existing ??
-        (await prisma.project.create({
-          data: { ...data, organizationId: organization.id, location: 'Algiers' },
-        }));
+      const project = existing
+        ? // Re-running the seed also backfills fields added by later migrations (category, availability).
+          await prisma.project.update({
+            where: { id: existing.id },
+            data: { category: data.category, availability: data.availability },
+          })
+        : await prisma.project.create({
+            data: { ...data, organizationId: organization.id, location: 'Algiers' },
+          });
       for (const r of requirements) {
         await prisma.projectSkill.upsert({
           where: { projectId_skillId: { projectId: project.id, skillId: skillId(r.skill) } },
@@ -162,6 +185,8 @@ async function main(): Promise<void> {
           'A one-day neighbourhood event with free health information and first-aid demos.',
         status: ProjectStatus.PUBLISHED,
         maxVolunteers: 15,
+        category: ProjectCategory.HEALTH,
+        availability: [Availability.WEEKENDS],
         startDate: new Date('2026-11-14T09:00:00Z'),
         endDate: new Date('2026-11-14T17:00:00Z'),
       },
@@ -178,6 +203,8 @@ async function main(): Promise<void> {
         description: 'Two-day clean-up of public spaces and a small recycling workshop.',
         status: ProjectStatus.COMPLETED,
         maxVolunteers: 30,
+        category: ProjectCategory.ENVIRONMENT,
+        availability: [Availability.WEEKENDS],
         startDate: new Date('2026-05-02T08:00:00Z'),
         endDate: new Date('2026-05-03T16:00:00Z'),
       },
@@ -188,27 +215,69 @@ async function main(): Promise<void> {
     );
 
     // ── Applications ──
+    // Scores come from the real matching strategy so the demo data always agrees with the algorithm.
+    const matcher = new RuleBasedMatchStrategy();
+    const scoreFor = async (projectId: string): Promise<number> => {
+      const [profile, held, project] = await Promise.all([
+        prisma.volunteerProfile.findUniqueOrThrow({ where: { userId: volunteer.id } }),
+        prisma.userSkill.findMany({
+          where: { userId: volunteer.id },
+          include: { skill: { select: { name: true } } },
+        }),
+        prisma.project.findUniqueOrThrow({
+          where: { id: projectId },
+          include: { skills: { include: { skill: { select: { name: true } } } } },
+        }),
+      ]);
+      const { score } = matcher.compute({
+        volunteer: {
+          skills: held.map((h) => ({
+            skillId: h.skillId,
+            name: h.skill.name,
+            proficiency: h.proficiency,
+          })),
+          location: profile.location,
+          interests: profile.interests,
+          availability: profile.availability,
+        },
+        project: {
+          skills: project.skills.map((ps) => ({
+            skillId: ps.skillId,
+            name: ps.skill.name,
+            importance: ps.importance,
+            requiredCount: ps.requiredCount,
+          })),
+          location: project.location,
+          category: project.category,
+          availability: project.availability,
+        },
+      });
+      return score;
+    };
+
+    const openScore = await scoreFor(openProject.id);
     await prisma.application.upsert({
       where: { projectId_volunteerId: { projectId: openProject.id, volunteerId: volunteer.id } },
-      update: {},
+      update: { matchScore: openScore },
       create: {
         projectId: openProject.id,
         volunteerId: volunteer.id,
         status: ApplicationStatus.PENDING,
-        matchScore: 78,
+        matchScore: openScore,
         message: 'I would love to help with the first-aid stand.',
       },
     });
+    const completedScore = await scoreFor(completedProject.id);
     await prisma.application.upsert({
       where: {
         projectId_volunteerId: { projectId: completedProject.id, volunteerId: volunteer.id },
       },
-      update: {},
+      update: { matchScore: completedScore },
       create: {
         projectId: completedProject.id,
         volunteerId: volunteer.id,
         status: ApplicationStatus.ACCEPTED,
-        matchScore: 64,
+        matchScore: completedScore,
       },
     });
 

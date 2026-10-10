@@ -3,8 +3,8 @@
 Smart volunteering platform: connects young people's skills with volunteering opportunities and helps
 organizations manage projects and measure social impact.
 
-> **Status: Phase 5 — Applications complete** (on top of foundation, authentication, profiles & skills, projects).
-> Matching and impact are delivered in Phases 6–7 (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
+> **Status: Phase 6 — Matching complete** (on top of foundation, authentication, profiles & skills, projects, applications).
+> Impact is delivered in Phase 7 (see [Roadmap](#roadmap)). Nothing in this README documents endpoints
 > that do not exist yet.
 
 ## Tech stack
@@ -123,6 +123,10 @@ src/
 │   ├── utils/              status state machine, visibility filter (pure, unit-tested)
 │   └── services/           ProjectsService (rules), ProjectSkillsService
 ├── applications/           apply / review / withdraw, state machine, privacy mapper
+├── matching/               explainable scoring + recommendations (replaceable strategy)
+│   ├── strategies/         RuleBasedMatchStrategy (pure, deterministic)
+│   ├── interfaces/         MatchStrategy contract + MATCH_STRATEGY injection token
+│   └── services/           MatchingService (loads data, delegates scoring)
 │   ├── utils/              application status machine (pure, unit-tested)
 │   └── services/           ApplicationsService (volunteer side), ApplicationReviewService (organization side)
 └── common/
@@ -200,6 +204,15 @@ User 1─* Application *─1 Project   (unique: projectId + volunteerId)
     volunteers are often young people.
 23. **Applications are private resources:** accessing someone else's returns 404 (unlike public projects, which
     return 403 on modification), so application ids cannot be probed.
+24. **Matching is a strategy behind an interface.** `MatchingService` loads plain data and delegates to the bound
+    `MatchStrategy`; swapping in an ML model changes one provider binding. A test runs the service against a fake
+    strategy to guarantee the seam stays clean.
+25. **Unspecified requirements are excluded and weights re-normalized** instead of awarding or withholding free
+    points, so scores stay comparable across projects with different amounts of detail.
+26. **Fixed vocabularies for `availability` and interests/categories** (enums) instead of free text, so matching is
+    deterministic and explainable. Extending the lists is a one-line enum change plus a migration.
+27. **Migrations preserve data:** the availability migration converts existing free text (e.g. "Weekends and
+    evenings") to the new values instead of dropping it.
 
 ### Known trade-offs
 
@@ -224,6 +237,13 @@ User 1─* Application *─1 Project   (unique: projectId + volunteerId)
 
 Paginated lists return `{ "data": [], "meta": { "page", "limit", "total", "totalPages" } }`
 (`limit` max 100, default 20).
+
+## Upgrading from the previous phase
+
+Phase 6 contains one **breaking API change**: `availability` (on `/volunteers/me`, `/users/*`, `/auth/me`) was free
+text and is now an **array** of `Availability` values. Existing text is converted by the migration on a best-effort
+basis (keywords `weekday`, `weekend`, `evening`, `flexible`/`anytime`). Run `npm run prisma:migrate`, then
+`npm run prisma:seed` to backfill the demo data (re-running the seed is safe).
 
 ## Authentication
 
@@ -275,7 +295,7 @@ list() {}
 * Ownership rules (e.g. "organizations manage only their own projects") are enforced in services as the
   features arrive in later phases.
 
-## API reference (Phases 1–5)
+## API reference (Phases 1–6)
 
 All routes require `Authorization: Bearer <accessToken>` unless marked public. List endpoints return the
 paginated envelope (`page`, `limit` ≤ 100).
@@ -294,7 +314,7 @@ paginated envelope (`page`, `limit` ≤ 100).
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET / PATCH | `/volunteers/me` | Profile: `bio, phone, location, availability, experience` |
+| GET / PATCH | `/volunteers/me` | Profile: `bio, phone, location, experience`, plus `availability[]` and `interests[]` (see [Enums](#enums)) |
 | GET | `/volunteers/me/skills` | My skills with proficiency |
 | POST | `/volunteers/me/skills` | Add `{ skillId, proficiency? }` (default `BEGINNER`; 409 if already added) |
 | PATCH | `/volunteers/me/skills/:skillId` | Change proficiency |
@@ -340,6 +360,8 @@ sort last. Unknown query parameters are rejected with 400.
 **Visibility:** volunteers see public projects only (not drafts, not projects of suspended organizations);
 organizations additionally see their own drafts; admins see everything. A project you may not see returns
 `404` (never `403`) so drafts cannot be discovered.
+
+**Category & availability:** optional `category` (enum) and `availability[]` describe the project for matching; `null`/`[]` clear them.
 
 **Lifecycle:**
 
@@ -390,6 +412,84 @@ WITHDRAWN ──► PENDING                      (volunteer applies again; react
 * **Isolation:** another volunteer's or organization's application behaves as non-existent (`404`).
 * `matchScore` is `null` until the Phase 6 matching module fills it in.
 
+### Enums
+
+| Name | Values | Used by |
+| --- | --- | --- |
+| `Availability` | `WEEKDAYS`, `WEEKENDS`, `EVENINGS`, `FLEXIBLE` (any time) | volunteer `availability[]`, project `availability[]` |
+| `ProjectCategory` | `EDUCATION`, `HEALTH`, `ENVIRONMENT`, `COMMUNITY`, `HUMANITARIAN`, `ARTS_CULTURE`, `SPORTS`, `TECHNOLOGY`, `ANIMAL_WELFARE` | project `category`, volunteer `interests[]` |
+
+Array fields are **replaced as a whole** on PATCH; send `[]` to clear (`null` is rejected).
+A project's `availability` means *when volunteers are needed*; empty or containing `FLEXIBLE` = no constraint.
+Projects can be filtered with `?category=`.
+
+### Matching (VOLUNTEER only)
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/matching/projects?minScore=&page=&limit=` | Open projects ranked best-first, each with its explained score |
+| GET | `/matching/projects/:id` | How well I match one project (any project visible to me) |
+
+Recommendations exclude: projects that are not `PUBLISHED`, already ended, full (`maxVolunteers` reached), projects
+I already applied to (a withdrawn application does not count) and projects of suspended organizations. Ties are
+broken by newest project first. Only the 500 newest open projects are scored per request (bounded work).
+
+Response of `GET /matching/projects/:id`:
+
+```json
+{
+  "project": { "id": "…", "title": "Community Health Awareness Day", "status": "PUBLISHED" },
+  "match": {
+    "score": 93,
+    "matchedSkills": [{ "skillId": "…", "name": "First Aid", "importance": 5, "proficiency": "ADVANCED" }],
+    "missingSkills": [],
+    "locationMatch": true,
+    "interestMatch": true,
+    "availabilityMatch": true,
+    "breakdown": {
+      "skills":       { "weight": 50, "applicable": true, "ratio": 0.85, "contribution": 42.5 },
+      "location":     { "weight": 20, "applicable": true, "ratio": 1,    "contribution": 20 },
+      "interest":     { "weight": 20, "applicable": true, "ratio": 1,    "contribution": 20 },
+      "availability": { "weight": 10, "applicable": true, "ratio": 1,    "contribution": 10 }
+    },
+    "strategy": "rule-based-v1"
+  }
+}
+```
+
+**The algorithm (`rule-based-v1`)**
+
+```text
+score = 100 × Σ(weight × fit) / Σ(weight)      over the components that apply to the project
+
+skills       50   Σ importance × proficiency% over the skills the volunteer has  ÷  Σ importance of all required skills
+                  proficiency%: BEGINNER 60 · INTERMEDIATE 80 · ADVANCED 100 · EXPERT 100
+location     20   volunteer and project share a location token (case/accent-insensitive; "Algiers, Algeria" ∋ "algiers")
+interest     20   project.category ∈ volunteer.interests
+availability 10   volunteer is FLEXIBLE, or shares a slot with the project
+```
+
+* **Components the project does not specify are ignored** (reported as `null`, `applicable: false`) and the remaining
+  weights are re-normalized. A project that only states a location is judged on location alone; it is neither
+  inflated nor penalized for what it does not ask. A project that states nothing scores `0`.
+* **Missing volunteer data earns no credit** (no location, no interests, empty availability, no skills).
+* `requiredCount` (team size) is not part of the score; it describes team composition, not individual fit.
+* The score is stored on the application when a volunteer applies (`matchScore`, a snapshot) and lets organizations
+  sort applicants (`sortBy=matchScore`). If matching ever fails, applying still works and the score stays empty.
+
+**Replacing the algorithm.** The scoring lives behind one interface:
+
+```ts
+interface MatchStrategy {
+  readonly name: string;
+  score(input: { volunteer: VolunteerMatchProfile; project: ProjectMatchRequirements }): Promise<MatchResult>;
+}
+```
+
+Implement it (e.g. calling an ML service; the method is async for that reason) and change the single binding in
+`matching.module.ts`: `{ provide: MATCH_STRATEGY, useClass: YourStrategy }`. Controllers, projects and applications
+do not change. `MatchResult.strategy` records which algorithm produced a score.
+
 ## Testing
 
 ```bash
@@ -430,6 +530,6 @@ curl -X POST http://localhost:3000/auth/refresh -H 'Content-Type: application/js
 | 3 | Profiles & skills | ✅ done |
 | 4 | Projects | ✅ done |
 | 5 | Applications | ✅ done |
-| 6 | Matching | next |
-| 7 | Impact | |
+| 6 | Matching | ✅ done |
+| 7 | Impact | next |
 | 8 | Final quality review | |

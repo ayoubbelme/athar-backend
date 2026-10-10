@@ -1,6 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { ApplicationStatus, ProficiencyLevel, ProjectStatus } from '@prisma/client';
+import {
+  ApplicationStatus,
+  Availability,
+  ProficiencyLevel,
+  ProjectCategory,
+  ProjectStatus,
+} from '@prisma/client';
 import { IsEnum, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { SORT_ORDERS, SortOrder } from '../../common/constants';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -107,7 +113,8 @@ class ApplicantDto {
   @ApiProperty({ format: 'uuid' }) id: string;
   @ApiProperty() name: string;
   @ApiPropertyOptional({ nullable: true }) location: string | null;
-  @ApiPropertyOptional({ nullable: true }) availability: string | null;
+  @ApiProperty({ enum: Availability, isArray: true }) availability: Availability[];
+  @ApiProperty({ enum: ProjectCategory, isArray: true }) interests: ProjectCategory[];
   @ApiPropertyOptional({ nullable: true }) bio: string | null;
   @ApiPropertyOptional({ nullable: true }) experience: string | null;
   @ApiProperty({ type: [ApplicantSkillDto] }) skills: ApplicantSkillDto[];

@@ -125,6 +125,41 @@ describe('Projects (e2e)', () => {
       ]);
     });
 
+    it('stores a category and the availability a project needs (used by matching)', async () => {
+      const res = await as(orgA)
+        .post('/projects')
+        .send(baseProject({ category: 'HEALTH', availability: ['WEEKENDS', 'EVENINGS'] }))
+        .expect(201);
+      expect(res.body).toMatchObject({
+        category: 'HEALTH',
+        availability: ['WEEKENDS', 'EVENINGS'],
+      });
+
+      const defaults = await as(orgA).post('/projects').send(baseProject()).expect(201);
+      expect(defaults.body).toMatchObject({ category: null, availability: [] });
+
+      const patched = await as(orgA)
+        .patch(`/projects/${res.body.id}`)
+        .send({ category: 'EDUCATION', availability: ['FLEXIBLE'] })
+        .expect(200);
+      expect(patched.body).toMatchObject({ category: 'EDUCATION', availability: ['FLEXIBLE'] });
+
+      const cleared = await as(orgA)
+        .patch(`/projects/${res.body.id}`)
+        .send({ category: null, availability: [] })
+        .expect(200);
+      expect(cleared.body).toMatchObject({ category: null, availability: [] });
+    });
+
+    it.each([
+      ['unknown category', { category: 'GAMING' }],
+      ['unknown availability value', { availability: ['NIGHTS'] }],
+      ['duplicate availability values', { availability: ['WEEKENDS', 'WEEKENDS'] }],
+      ['availability as a string', { availability: 'WEEKENDS' }],
+    ])('rejects %s on create with 400', async (_l, body) => {
+      await as(orgA).post('/projects').send(baseProject(body)).expect(400);
+    });
+
     it('can be created directly as PUBLISHED', async () => {
       const res = await as(orgA)
         .post('/projects')
@@ -422,6 +457,7 @@ describe('Projects (e2e)', () => {
       await createProject(orgA, {
         title: `${TAG} Alpha`,
         status: 'PUBLISHED',
+        category: 'HEALTH',
         location: 'Algiers',
         startDate: '2026-11-01T00:00:00Z',
         skills: [{ skillId: skillA }],
@@ -458,6 +494,8 @@ describe('Projects (e2e)', () => {
       expect(
         titleOf((await list({ location: 'algi', sortBy: 'title', order: 'asc' })).body.data),
       ).toEqual([`${TAG} Alpha`, `${TAG} Charlie`]);
+      expect((await list({ category: 'HEALTH' })).body.meta.total).toBe(1);
+      expect((await list({ category: 'SPORTS' })).body.meta.total).toBe(0);
       expect((await list({ skillId: skillA })).body.meta.total).toBe(2);
       expect((await list({ skillId: skillB })).body.meta.total).toBe(2);
       expect((await list({ organizationId: orgB.orgId })).body.meta.total).toBe(2);
@@ -522,6 +560,7 @@ describe('Projects (e2e)', () => {
       ['non-UUID organizationId', { organizationId: 'x' }],
       ['invalid date', { startDateFrom: 'soon' }],
       ['invalid status', { status: 'ARCHIVED' }],
+      ['invalid category', { category: 'GAMING' }],
       ['unknown query parameter', { evil: '1' }],
     ])('rejects %s with 400', async (_l, query) => {
       await as(volunteer).get('/projects').query(query).expect(400);

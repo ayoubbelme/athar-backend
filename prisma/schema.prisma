@@ -30,6 +30,27 @@ enum ProficiencyLevel {
   EXPERT
 }
 
+/// When a volunteer can help / when a project needs volunteers. FLEXIBLE = any time.
+enum Availability {
+  WEEKDAYS
+  WEEKENDS
+  EVENINGS
+  FLEXIBLE
+}
+
+/// Shared vocabulary: projects have one category, volunteers list the categories they care about.
+enum ProjectCategory {
+  EDUCATION
+  HEALTH
+  ENVIRONMENT
+  COMMUNITY
+  HUMANITARIAN
+  ARTS_CULTURE
+  SPORTS
+  TECHNOLOGY
+  ANIMAL_WELFARE
+}
+
 enum ProjectStatus {
   DRAFT
   PUBLISHED
@@ -55,7 +76,7 @@ model User {
   role             Role
   status           AccountStatus @default(ACTIVE)
   location         String?
-  availability     String?
+  availability         Availability[]  @default([])
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
@@ -75,7 +96,8 @@ model VolunteerProfile {
   bio          String?
   phone        String?
   location     String?
-  availability String?
+  availability Availability[]    @default([])
+  interests    ProjectCategory[] @default([])
   experience   String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -166,6 +188,8 @@ model Project {
   endDate        DateTime?
   status         ProjectStatus @default(DRAFT)
   maxVolunteers  Int?
+  category       ProjectCategory?
+  availability   Availability[]    @default([])
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
@@ -177,6 +201,7 @@ model Project {
   @@index([organizationId])
   @@index([status, startDate])
   @@index([location])
+  @@index([category])
   @@map("projects")
 }
 

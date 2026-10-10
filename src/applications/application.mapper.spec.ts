@@ -15,8 +15,13 @@ const row = (status: ApplicationStatus) =>
       name: 'Vol',
       email: 'vol@example.com',
       location: 'Algiers',
-      availability: 'Weekends',
-      volunteerProfile: { bio: 'bio', phone: '+213 555 000 000', experience: 'exp' },
+      volunteerProfile: {
+        bio: 'bio',
+        phone: '+213 555 000 000',
+        experience: 'exp',
+        availability: ['WEEKENDS'],
+        interests: ['HEALTH'],
+      },
       skills: [{ proficiency: 'EXPERT', skill: { id: 's1', name: 'First Aid' } }],
     },
   }) as unknown as Parameters<typeof toReviewApplicationView>[0];
@@ -49,6 +54,8 @@ describe('toReviewApplicationView (contact privacy)', () => {
       name: 'Vol',
       bio: 'bio',
       experience: 'exp',
+      availability: ['WEEKENDS'],
+      interests: ['HEALTH'],
       skills: [{ id: 's1', name: 'First Aid', proficiency: 'EXPERT' }],
     });
   });
